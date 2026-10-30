@@ -21,7 +21,7 @@ DishLens is a visual-first dish discovery app. Select ingredients you already ha
 4. Set `GEMINI_API_KEY` in `.env.local`. Keep the key server-side; never prefix it with `NEXT_PUBLIC_`.
 5. Run `npm run dev` and open http://localhost:3000.
 
-The default model is `gemini-3.8-flash`; override it with `GEMINI_MODEL` if required. The model must be available to your API key.
+The default model is `gemini-3.5-flash-lite`; override it with `GEMINI_MODEL` if required. The model must be available to your API key.
 
 ## Deploy to Vercel
 
