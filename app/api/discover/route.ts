@@ -51,7 +51,7 @@ const FOOD: Record<string,Nutrients> = {
   "cooking oil":{calories:884,protein:0,carbs:0,fat:100,fiber:0,vitaminA:0,vitaminC:0,calcium:0,iron:0}
 };
 
-function normalize(value:string){return value.toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\\s+/g," ").trim();}
+function normalize(value:string){return value.toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/ +/g," ").trim();}
 function foodKey(name:string):string|undefined{
   const n=normalize(name);
   const aliases:[string,string][]=[
