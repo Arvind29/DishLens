@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type Pick = { id: string; name: string; apiName: string; category: string };
 type Part = { name: string; quantity: string; grams: number };
@@ -88,8 +89,8 @@ function calculateNutrition(parts:Part[],servings:number){
   return {perServing,coveragePercent:totalGrams?Math.round(matchedGrams/totalGrams*100):0,source:"Approximate generic-food values based on common USDA FoodData Central entries."};
 }
 function tokens(value:string){return normalize(value).split(" ").filter(w=>w.length>2&&!["with","and","the","for","indian","style","recipe"].includes(w));}
-async function jsonFetch(url:string):Promise<any|null>{
-  try{const response=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(6500),headers:{Accept:"application/json"}});if(!response.ok)return null;return await response.json();}catch{return null;}
+async function jsonFetch(url:string,timeout=3500):Promise<any|null>{
+  try{const response=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(timeout),headers:{Accept:"application/json"}});if(!response.ok)return null;return await response.json();}catch{return null;}
 }
 async function getDishPhoto(name:string):Promise<Photo>{
   const wanted=tokens(name);
@@ -132,22 +133,32 @@ export async function POST(request:Request){
     "You are DishLens, an ingredient-first recipe planner for everyday cooks, including Indian and Maharashtrian home cooking.",
     "The user selected these ingredients: "+JSON.stringify(picks.map(item=>({id:item.id,name:item.name,canonicalName:item.apiName,category:item.category}))),
     "Preference: "+goal+".",
-    "Return 4 to 6 practical, recognizable dishes. When at least 2 ingredients are selected, target 3 combination dishes that use 2 or more selected items and 2 ideas centered on exactly one selected item. When only one ingredient is selected, give distinct practical ways to cook or use that item.",
+    "Return exactly 4 practical, recognizable dishes. If 2 or more ingredients are selected, return 2 combination dishes using at least 2 selected ingredients each, plus 2 ideas centered on exactly 1 selected ingredient. If only 1 ingredient is selected, return 4 distinct practical ways to use it.",
     "Use only the exact selected ids in ingredientIds. Combination recipes have at least 2 selected ids. Single-ingredient ideas have exactly 1 selected id. Normal household staples and seasonings may be added. Do not claim a food treats or prevents a disease.",
-    "Fields per recipe: name, description, ingredientIds, timeMinutes, servings, ingredients (array of name, quantity, grams), steps (5-8 ordered and actionable strings), substitutions (1-3), nutritionHighlights (1-2 factual food-context notes). grams are numeric edible-portion estimates for the whole recipe. For pulses, dals, beans, rice, grains and oats, grams must be dry/uncooked weights before soaking or cooking; for vegetables and fruit use raw edible weight; for eggs use edible weight without shells; for dairy and oil use the amount added. Quantity should roughly match grams. Include oil if used. Do not output calories or nutrient values.",
+    "Keep the response compact: each description under 25 words; 4 to 5 clear cooking steps; 1 or 2 substitutions; 1 short nutrition note. Fields: name, description, ingredientIds, timeMinutes, servings, ingredients (array of name, quantity, grams), steps, substitutions, nutritionHighlights. grams are numeric edible-portion estimates for the whole recipe. For pulses, dals, beans, rice, grains and oats, grams must be dry/uncooked weights before soaking or cooking; for vegetables and fruit use raw edible weight; for eggs use edible weight without shells; for dairy and oil use the amount added. Quantity should roughly match grams. Include oil if used. Do not output calories or nutrient values.",
     "Return only valid JSON with this structure: {\"recipes\":[{\"name\":\"...\",\"description\":\"...\",\"ingredientIds\":[\"...\"],\"timeMinutes\":30,\"servings\":2,\"ingredients\":[{\"name\":\"spinach\",\"quantity\":\"2 cups\",\"grams\":60}],\"steps\":[\"...\",\"...\",\"...\",\"...\",\"...\"],\"substitutions\":[\"...\"],\"nutritionHighlights\":[\"...\"]}]}"
   ].join("\n");
   let generated="";
   try{
-    const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(apiKey),{
-      method:"POST",headers:{"Content-Type":"application/json"},cache:"no-store",signal:AbortSignal.timeout(25000),
-      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{temperature:.55,responseMimeType:"application/json"}})
+    const startedAt=Date.now();
+    console.info("[DishLens] Gemini request started",{model,ingredientCount:picks.length});
+    const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
+      method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":apiKey},cache:"no-store",signal:AbortSignal.timeout(45000),
+      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{temperature:.45,responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"low"}}})
     });
     const data=await response.json();
-    if(!response.ok)return Response.json({error:"Gemini request failed: "+(data?.error?.message||("HTTP "+response.status))},{status:502});
+    if(!response.ok){
+      console.error("[DishLens] Gemini API returned an error",{status:response.status,model,message:data?.error?.message||"Unknown Gemini API error"});
+      const status=response.status===429?503:502;
+      const message=response.status===429?"Gemini API quota or rate limit reached. Check your Google AI Studio usage and billing.":response.status>=500?"Gemini is temporarily unavailable. Please retry in a minute.":(data?.error?.message||("HTTP "+response.status));
+      return Response.json({error:"Gemini request failed: "+message},{status});
+    }
+    console.info("[DishLens] Gemini response received",{model,elapsedMs:Date.now()-startedAt});
     generated=data?.candidates?.[0]?.content?.parts?.map((part:any)=>part.text||"").join("")||"";
   }catch(error){
-    return Response.json({error:error instanceof Error&&error.name==="TimeoutError"?"Gemini took too long to respond. Please retry.":"Could not reach Gemini. Check the API key and server network, then retry."},{status:502});
+    const timedOut=error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError");
+    console.error("[DishLens] Gemini request exception",{model,name:error instanceof Error?error.name:"Unknown",message:error instanceof Error?error.message:String(error)});
+    return Response.json({error:timedOut?"Gemini did not respond within 45 seconds. Try selecting fewer ingredients, then retry. If this continues, check the Google AI Studio API quota and service status.":"Could not reach Gemini. Check the API key, network access and Google AI Studio service status, then retry."},{status:timedOut?504:502});
   }
   let parsed:any;
   try{parsed=JSON.parse(generated.trim().replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,""));}catch{return Response.json({error:"Gemini returned invalid JSON. Retry or select an available model."},{status:502});}
@@ -174,6 +185,6 @@ export async function POST(request:Request){
     };
   }).filter(Boolean);
   if(!recipes.length)return Response.json({error:"Gemini returned no usable recipes linked to your selected ingredients. Try another selection."},{status:502});
-  const withPhotos=await Promise.all(recipes.slice(0,6).map(async(recipe:any)=>({...recipe,photo:await getDishPhoto(recipe.name)})));
+  const withPhotos=await Promise.all(recipes.slice(0,4).map(async(recipe:any)=>({...recipe,photo:await getDishPhoto(recipe.name)})));
   return Response.json({recipes:withPhotos,model},{headers:{"Cache-Control":"no-store"}});
 }
