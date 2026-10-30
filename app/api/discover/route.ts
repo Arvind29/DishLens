@@ -128,7 +128,7 @@ export async function POST(request:Request){
   const picks=(Array.isArray(body.ingredients)?body.ingredients:[]).filter(item=>item&&typeof item.id==="string"&&typeof item.name==="string"&&typeof item.apiName==="string").slice(0,12);
   if(!picks.length)return Response.json({error:"Select at least one ingredient before discovering dishes."},{status:400});
   const goal=typeof body.goal==="string"?body.goal:"Balanced";
-  const model=(process.env.GEMINI_MODEL||"gemini-3.8-flash").trim();
+  const model=(process.env.GEMINI_MODEL||"gemini-3.5-flash-lite").trim();
   const prompt=[
     "You are DishLens, an ingredient-first recipe planner for everyday cooks, including Indian and Maharashtrian home cooking.",
     "The user selected these ingredients: "+JSON.stringify(picks.map(item=>({id:item.id,name:item.name,canonicalName:item.apiName,category:item.category}))),
@@ -143,8 +143,8 @@ export async function POST(request:Request){
     const startedAt=Date.now();
     console.info("[DishLens] Gemini request started",{model,ingredientCount:picks.length});
     const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
-      method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":apiKey},cache:"no-store",signal:AbortSignal.timeout(45000),
-      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{temperature:.45,responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"low"}}})
+      method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":apiKey},cache:"no-store",signal:AbortSignal.timeout(30000),
+      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:3000,thinkingConfig:{thinkingLevel:"minimal"}}})
     });
     const data=await response.json();
     if(!response.ok){
@@ -158,7 +158,7 @@ export async function POST(request:Request){
   }catch(error){
     const timedOut=error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError");
     console.error("[DishLens] Gemini request exception",{model,name:error instanceof Error?error.name:"Unknown",message:error instanceof Error?error.message:String(error)});
-    return Response.json({error:timedOut?"Gemini did not respond within 45 seconds. Try selecting fewer ingredients, then retry. If this continues, check the Google AI Studio API quota and service status.":"Could not reach Gemini. Check the API key, network access and Google AI Studio service status, then retry."},{status:timedOut?504:502});
+    return Response.json({error:timedOut?"Gemini did not respond within 30 seconds. Try selecting fewer ingredients, then retry. If this continues, check the Google AI Studio API quota and service status.":"Could not reach Gemini. Check the API key, network access and Google AI Studio service status, then retry."},{status:timedOut?504:502});
   }
   let parsed:any;
   try{parsed=JSON.parse(generated.trim().replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,""));}catch{return Response.json({error:"Gemini returned invalid JSON. Retry or select an available model."},{status:502});}
